@@ -3,7 +3,13 @@ import DesignArt from './DesignArt.jsx';
 
 const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
 const MIN_SIZE = 6;
-const MAX_SIZE = 70;
+
+// Keep the design's center far enough from the boundary that its edges stay inside.
+const clampCenter = (v, lo, hi, size) => {
+  const a = lo + size / 2;
+  const b = hi - size / 2;
+  return a > b ? (lo + hi) / 2 : clamp(v, a, b);
+};
 
 /**
  * The shirt canvas.
@@ -11,8 +17,9 @@ const MAX_SIZE = 70;
  * Layers (bottom → top): white box, flat garment color, the untouched mockup
  * image (its transparent shirt shape reveals the color), the draggable design.
  *
- * Clicking the design shows a transform box with corner handles for resizing.
- * Clicking anywhere else hides it.
+ * The dashed print area is a fixed boundary: the design moves and grows only
+ * within it. Clicking the design shows corner handles for resizing; clicking
+ * anywhere else hides them.
  */
 export default function ShirtPreview({
   cut,
@@ -29,6 +36,7 @@ export default function ShirtPreview({
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const area = cut?.printArea ?? { left: 25, top: 30, right: 75, bottom: 80 };
+  const maxSize = Math.max(MIN_SIZE, Math.min(area.right - area.left, area.bottom - area.top));
 
   const pointerPct = useCallback((clientX, clientY) => {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -44,21 +52,27 @@ export default function ShirtPreview({
       const p = pointerPct(clientX, clientY);
       if (!p) return;
       onMove({
-        x: clamp(p.x, area.left, area.right),
-        y: clamp(p.y, area.top, area.bottom),
+        x: clampCenter(p.x, area.left, area.right, size),
+        y: clampCenter(p.y, area.top, area.bottom, size),
       });
     },
-    [pointerPct, onMove, area.left, area.right, area.top, area.bottom]
+    [pointerPct, onMove, area.left, area.right, area.top, area.bottom, size]
   );
 
   const resizeTo = useCallback(
     (clientX, clientY) => {
       const p = pointerPct(clientX, clientY);
       if (!p) return;
-      const next = 2 * Math.max(Math.abs(p.x - position.x), Math.abs(p.y - position.y));
-      onResize(clamp(next, MIN_SIZE, MAX_SIZE));
+      const wanted = 2 * Math.max(Math.abs(p.x - position.x), Math.abs(p.y - position.y));
+      const next = clamp(wanted, MIN_SIZE, maxSize);
+      onResize(next);
+      // Growing near the edge: nudge the design back inside the boundary
+      onMove({
+        x: clampCenter(position.x, area.left, area.right, next),
+        y: clampCenter(position.y, area.top, area.bottom, next),
+      });
     },
-    [pointerPct, onResize, position.x, position.y]
+    [pointerPct, onResize, onMove, position.x, position.y, maxSize, area.left, area.right, area.top, area.bottom]
   );
 
   // Click outside the canvas hides the transform box
@@ -83,7 +97,6 @@ export default function ShirtPreview({
       ref={canvasRef}
       className="relative w-full select-none overflow-hidden rounded-2xl border border-sand bg-white"
       onPointerDown={(e) => {
-        // Background click (color layer carries data-bg) → deselect
         if (e.target.dataset?.bg) onSelectChange(false);
       }}
     >
@@ -102,7 +115,7 @@ export default function ShirtPreview({
         <div className="aspect-square w-full" />
       )}
 
-      {/* Print area guide */}
+      {/* Print area — a fixed boundary, independent of the design */}
       {design && (
         <div
           className={`pointer-events-none absolute rounded-lg border border-dashed transition-opacity ${
@@ -111,10 +124,10 @@ export default function ShirtPreview({
               : 'border-stone opacity-25'
           }`}
           style={{
-            left: `${area.left - size / 2}%`,
-            top: `${area.top - size / 2}%`,
-            width: `${area.right - area.left + size}%`,
-            height: `${area.bottom - area.top + size}%`,
+            left: `${area.left}%`,
+            top: `${area.top}%`,
+            width: `${area.right - area.left}%`,
+            height: `${area.bottom - area.top}%`,
           }}
         />
       )}

@@ -159,6 +159,7 @@ function buildShopData() {
         },
         sizes: splitList(row.Sizes),
         colors: splitList(row.Colors),
+        price: num(row.Price, null),
       });
     }
   }

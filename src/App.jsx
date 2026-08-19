@@ -4,6 +4,8 @@ import { isSvgMarkup, prepareSvg } from './lib/media.js';
 import ShirtPreview from './components/ShirtPreview.jsx';
 import DesignArt from './components/DesignArt.jsx';
 import Modal from './components/Modal.jsx';
+import Basket from './components/Basket.jsx';
+import { loadBasket, saveBasket, basketTotal } from './lib/basket.js';
 
 const HEX_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
@@ -69,6 +71,23 @@ export default function App() {
   const [newDesignTitleInput, setNewDesignTitleInput] = useState('');
 
   const [modal, setModal] = useState(null);
+
+  // Basket + tiny hash router ('#/basket' shows the basket page)
+  const [basket, setBasket] = useState(loadBasket);
+  const [route, setRoute] = useState(
+    typeof window !== 'undefined' ? window.location.hash : ''
+  );
+  useEffect(() => {
+    const onHash = () => setRoute(window.location.hash);
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  const onBasketPage = route.startsWith('#/basket');
+
+  const updateBasket = (items) => {
+    setBasket(items);
+    saveBasket(items);
+  };
 
   // Defaults once config arrives
   useEffect(() => {
@@ -183,38 +202,52 @@ export default function App() {
     setNewDesignTitleInput('');
   };
 
-  const handleOrder = () => {
+  const currency = config.currency ?? '$';
+  const price = selectedCut?.price ?? null;
+  const fmtPrice = (v) =>
+    v == null ? null : `${currency}${Number(v).toFixed(2).replace(/\.00$/, '')}`;
+
+  const handleAddToBasket = () => {
+    const item = {
+      id: Date.now(),
+      qty: 1,
+      cutId: selectedCut?.id,
+      cutLabel: selectedCut?.label ?? '—',
+      colorName: activeColor?.name ?? activeColor?.hex ?? '—',
+      hex: activeColor?.hex ?? '#ffffff',
+      size: activeSize ?? '—',
+      designTitle: selectedDesign?.title ?? null,
+      designSrc: selectedDesign?.src ?? null,
+      designPrintSrc: selectedDesign?.printSrc ?? selectedDesign?.src ?? null,
+      placement: selectedDesign
+        ? {
+            x: Number(designPosition.x.toFixed(1)),
+            y: Number(designPosition.y.toFixed(1)),
+            scale: Number(designSize.toFixed(1)),
+          }
+        : null,
+      price,
+    };
+    updateBasket([...basket, item]);
+    window.location.hash = '#/basket';
+  };
+
+  const handleCheckout = () => {
     if (config.orderUrl) {
-      const params = new URLSearchParams({
-        cut: selectedCut?.label ?? '',
-        color: colorTitle,
-        hex: activeColor?.hex ?? '',
-        size: activeSize ?? '',
-        design: selectedDesign?.title ?? 'none',
-        x: designPosition.x.toFixed(0),
-        y: designPosition.y.toFixed(0),
-        scale: designSize.toFixed(0),
-      });
+      const params = new URLSearchParams({ basket: JSON.stringify(basket) });
       window.open(`${config.orderUrl}?${params.toString()}`, '_blank', 'noopener');
       return;
     }
     setModal({
       title: 'Order Summary',
       rows: [
-        ['Cut', selectedCut?.label ?? '—'],
-        ['Color', `${colorTitle} · ${activeColor?.hex ?? ''}`],
-        ['Size', activeSize ?? '—'],
-        ['Design', selectedDesign ? selectedDesign.title : 'None'],
-        ...(selectedDesign
-          ? [
-              [
-                'Placement',
-                `${designPosition.x.toFixed(0)}% across · ${designPosition.y.toFixed(
-                  0
-                )}% down · ${designSize.toFixed(0)}% wide`,
-              ],
-            ]
-          : []),
+        ...basket.map((it) => [
+          `${it.qty || 1}× ${it.cutLabel} (${it.size})`,
+          `${it.colorName}${it.designTitle ? ` · ${it.designTitle}` : ''}${
+            it.price != null ? ` · ${fmtPrice(it.price * (it.qty || 1))}` : ''
+          }`,
+        ]),
+        ['Total', fmtPrice(basketTotal(basket)) ?? '—'],
       ],
     });
   };
@@ -222,10 +255,10 @@ export default function App() {
   const orderButton = (
     <button
       type="button"
-      onClick={handleOrder}
+      onClick={handleAddToBasket}
       className="w-full rounded-xl bg-clay py-4 text-sm font-semibold uppercase tracking-[0.15em] text-cream shadow-sm transition-colors hover:bg-clay-dark"
     >
-      Order this shirt
+      Add to basket{price != null ? ` · ${fmtPrice(price)}` : ''}
     </button>
   );
 
@@ -242,13 +275,43 @@ export default function App() {
               </span>
             )}
           </h1>
-          <p className="hidden text-xs uppercase tracking-[0.2em] text-stone sm:block">
-            Made to order
-          </p>
+          <div className="flex items-baseline gap-6">
+            <p className="hidden text-xs uppercase tracking-[0.2em] text-stone sm:block">
+              Made to order
+            </p>
+            <a
+              href="#/basket"
+              className="text-sm font-medium text-ink underline-offset-4 hover:underline"
+            >
+              Basket
+              {basket.length > 0 && (
+                <span className="ml-1.5 rounded-full bg-clay px-2 py-0.5 text-xs font-semibold text-cream">
+                  {basket.reduce((n, it) => n + (it.qty || 1), 0)}
+                </span>
+              )}
+            </a>
+          </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-6xl px-4 pb-28 pt-8 sm:px-6 lg:pb-16">
+        {onBasketPage ? (
+          <Basket
+            items={basket}
+            currency={currency}
+            onQty={(id, delta) =>
+              updateBasket(
+                basket
+                  .map((it) =>
+                    it.id === id ? { ...it, qty: Math.max(0, (it.qty || 1) + delta) } : it
+                  )
+                  .filter((it) => (it.qty || 1) > 0)
+              )
+            }
+            onRemove={(id) => updateBasket(basket.filter((it) => it.id !== id))}
+            onCheckout={handleCheckout}
+          />
+        ) : (
         <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-14">
           {/* Preview — sticky on desktop */}
           <div className="lg:sticky lg:top-8 lg:self-start">
@@ -426,6 +489,14 @@ export default function App() {
 
             {/* Order — in-flow on desktop */}
             <div className="hidden border-t border-sand pt-6 lg:block">
+              {price != null && (
+                <div className="mb-4 flex items-baseline justify-between">
+                  <span className="text-xs uppercase tracking-[0.2em] text-stone">Price</span>
+                  <span className="font-display text-3xl font-semibold text-ink">
+                    {fmtPrice(price)}
+                  </span>
+                </div>
+              )}
               {orderButton}
               <p className="mt-3 text-center text-xs text-stone">
                 {selectedCut?.label} · {colorTitle} · {activeSize} ·{' '}
@@ -434,12 +505,15 @@ export default function App() {
             </div>
           </div>
         </div>
+        )}
       </main>
 
       {/* Order — sticky bar on mobile */}
-      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-sand bg-cream/90 p-3 backdrop-blur lg:hidden">
-        <div className="mx-auto max-w-6xl">{orderButton}</div>
-      </div>
+      {!onBasketPage && (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-sand bg-cream/90 p-3 backdrop-blur lg:hidden">
+          <div className="mx-auto max-w-6xl">{orderButton}</div>
+        </div>
+      )}
 
       <footer className="hidden border-t border-sand lg:block">
         <div className="mx-auto max-w-6xl px-6 py-6 text-xs text-stone">
