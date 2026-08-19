@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useConfig } from './lib/useConfig.js';
-import { isSvgMarkup, prepareSvg } from './lib/media.js';
 import ShirtPreview from './components/ShirtPreview.jsx';
 import DesignArt from './components/DesignArt.jsx';
 import Modal from './components/Modal.jsx';
 import Basket from './components/Basket.jsx';
+import AdminPanel from './components/AdminPanel.jsx';
 import { loadBasket, saveBasket, basketTotal } from './lib/basket.js';
+import {
+  loadAreaOverrides,
+  saveAreaOverrides,
+  loadDesignDefaults,
+  saveDesignDefaults,
+} from './lib/adminStore.js';
 
 const HEX_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
@@ -62,13 +68,16 @@ export default function App() {
   // Session-only additions (admin workbench)
   const [customColors, setCustomColors] = useState([]);
   const [customSizes, setCustomSizes] = useState([]);
-  const [customDesigns, setCustomDesigns] = useState([]);
 
   // Inputs
   const [newColorInput, setNewColorInput] = useState('#b0603f');
   const [newSizeInput, setNewSizeInput] = useState('');
-  const [newDesignSourceInput, setNewDesignSourceInput] = useState('');
-  const [newDesignTitleInput, setNewDesignTitleInput] = useState('');
+
+  // Admin edits: print areas + design default placements (browser-local until
+  // exported to shop-data.xlsx and uploaded)
+  const [areaEdit, setAreaEdit] = useState(false);
+  const [areaOverrides, setAreaOverrides] = useState(loadAreaOverrides);
+  const [designDefaults, setDesignDefaults] = useState(loadDesignDefaults);
 
   const [modal, setModal] = useState(null);
 
@@ -134,7 +143,22 @@ export default function App() {
     ...customSizes,
   ];
 
-  const designs = [...(config.designs ?? []), ...customDesigns];
+  const designs = config.designs ?? [];
+
+  // Print area: admin override (this browser) wins over the published value
+  const effectiveArea = areaOverrides[selectedCut?.id] ?? selectedCut?.printArea;
+  const cutForPreview = selectedCut ? { ...selectedCut, printArea: effectiveArea } : selectedCut;
+
+  const defaultPlacementFor = (design) =>
+    designDefaults[design.id] ??
+    design.default ??
+    (selectedCut?.printArea
+      ? {
+          x: (effectiveArea.left + effectiveArea.right) / 2,
+          y: (effectiveArea.top + effectiveArea.bottom) / 2,
+          scale: config.designScale ?? 20,
+        }
+      : { x: 50, y: 50, scale: config.designScale ?? 20 });
 
   // Keep selections valid when the cut changes
   const activeColor = colors.find((c) => c.hex === selectedColorHex) ?? colors[0];
@@ -148,8 +172,8 @@ export default function App() {
   const selectCut = (id) => {
     setSelectedCutId(id);
     const cut = cuts.find((c) => c.id === id);
-    if (cut?.printArea && selectedDesign) {
-      const a = cut.printArea;
+    const a = areaOverrides[id] ?? cut?.printArea;
+    if (a && selectedDesign) {
       setDesignPosition({ x: (a.left + a.right) / 2, y: (a.top + a.bottom) / 2 });
     }
   };
@@ -157,9 +181,10 @@ export default function App() {
   const selectDesign = (design) => {
     setSelectedDesign(design);
     setDesignActive(Boolean(design));
-    if (design && selectedCut?.printArea) {
-      const a = selectedCut.printArea;
-      setDesignPosition({ x: (a.left + a.right) / 2, y: (a.top + a.bottom) / 2 });
+    if (design) {
+      const d = defaultPlacementFor(design);
+      setDesignPosition({ x: d.x, y: d.y });
+      setDesignSize(d.scale);
     }
   };
 
@@ -180,26 +205,25 @@ export default function App() {
     setNewSizeInput('');
   };
 
-  const handleAddDesign = () => {
-    const source = newDesignSourceInput.trim();
-    const title = newDesignTitleInput.trim();
-    if (!source || !title) {
-      return showError('Please provide a design (image URL or SVG code) and a title.');
-    }
-    let design;
-    if (isSvgMarkup(source)) {
-      const clean = prepareSvg(source);
-      if (!clean) return showError('That SVG code is not valid.');
-      design = { id: `custom-${Date.now()}`, title, svg: clean };
-    } else if (/^(https?:\/\/|\/)/i.test(source)) {
-      design = { id: `custom-${Date.now()}`, title, src: source };
-    } else {
-      return showError('Paste either an image URL (PNG, JPG or SVG) or SVG code starting with <svg.');
-    }
-    setCustomDesigns((prev) => [...prev, design]);
-    selectDesign(design);
-    setNewDesignSourceInput('');
-    setNewDesignTitleInput('');
+  const handleAreaChange = (area) => {
+    if (!selectedCut) return;
+    const next = { ...areaOverrides, [selectedCut.id]: area };
+    setAreaOverrides(next);
+    saveAreaOverrides(next);
+  };
+
+  const handleSaveDesignDefault = () => {
+    if (!selectedDesign) return;
+    const next = {
+      ...designDefaults,
+      [selectedDesign.id]: {
+        x: Number(designPosition.x.toFixed(1)),
+        y: Number(designPosition.y.toFixed(1)),
+        scale: Number(designSize.toFixed(1)),
+      },
+    };
+    setDesignDefaults(next);
+    saveDesignDefaults(next);
   };
 
   const currency = config.currency ?? '$';
@@ -315,8 +339,30 @@ export default function App() {
         <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-14">
           {/* Preview — sticky on desktop */}
           <div className="lg:sticky lg:top-8 lg:self-start">
+            {IS_ADMIN && (
+              <AdminPanel
+                areaEdit={areaEdit}
+                onAreaEditChange={setAreaEdit}
+                area={effectiveArea ?? { left: 0, top: 0, right: 0, bottom: 0 }}
+                cutLabel={selectedCut?.label ?? '—'}
+                design={selectedDesign}
+                position={designPosition}
+                size={designSize}
+                onSaveDesignDefault={handleSaveDesignDefault}
+                hasDesignDefault={Boolean(
+                  selectedDesign && (designDefaults[selectedDesign.id] ?? selectedDesign.default)
+                )}
+                exportData={() => ({
+                  colors: config.colors ?? [],
+                  cuts,
+                  areaOverrides,
+                  designs,
+                  designDefaults,
+                })}
+              />
+            )}
             <ShirtPreview
-              cut={selectedCut}
+              cut={cutForPreview}
               color={activeColor?.hex}
               design={selectedDesign}
               position={designPosition}
@@ -325,11 +371,15 @@ export default function App() {
               onResize={setDesignSize}
               selected={designActive}
               onSelectChange={setDesignActive}
+              areaEditable={IS_ADMIN && areaEdit}
+              onAreaChange={handleAreaChange}
             />
             <p className="mt-3 text-center text-sm text-stone">
-              {selectedDesign
-                ? 'Drag to position · click the artwork to resize with the corner handles.'
-                : 'Pick a design to place it on the shirt.'}
+              {IS_ADMIN && areaEdit
+                ? 'Drag the box to move the print area · corner handles to resize.'
+                : selectedDesign
+                  ? 'Drag to position · click the artwork to resize with the corner handles.'
+                  : 'Pick a design to place it on the shirt.'}
             </p>
           </div>
 
@@ -462,29 +512,6 @@ export default function App() {
                   None
                 </button>
               </div>
-              {(IS_ADMIN || config.allowCustomerUploads !== false) && (
-                <Disclosure label="Use your own artwork">
-                  <div className="flex flex-col gap-2">
-                    <textarea
-                      placeholder="Image URL (PNG / JPG / SVG) or SVG code (<svg>…</svg>)"
-                      value={newDesignSourceInput}
-                      onChange={(e) => setNewDesignSourceInput(e.target.value)}
-                      rows={2}
-                      className={inputClass}
-                    />
-                    <input
-                      type="text"
-                      placeholder="Artwork title"
-                      value={newDesignTitleInput}
-                      onChange={(e) => setNewDesignTitleInput(e.target.value)}
-                      className={inputClass}
-                    />
-                    <button type="button" onClick={handleAddDesign} className={addBtnClass}>
-                      Add artwork
-                    </button>
-                  </div>
-                </Disclosure>
-              )}
             </Section>
 
             {/* Order — in-flow on desktop */}

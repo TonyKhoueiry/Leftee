@@ -52,6 +52,16 @@ export function useConfig() {
           ),
         ];
 
+        // Attach default placement (from the "Designs" sheet) by filename
+        const defaultsByFile = new Map(
+          (shop?.designDefaults ?? []).map((d) => [d.file, d])
+        );
+        for (const design of designs) {
+          const file = String(design.printSrc ?? design.src ?? '').split('/').pop();
+          const def = defaultsByFile.get(file);
+          if (def) design.default = { x: def.x, y: def.y, scale: def.scale };
+        }
+
         setConfig({ ...cfg, colors, cuts, designs });
       })
       .catch((err) => setError(err.message));

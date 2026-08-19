@@ -164,8 +164,24 @@ function buildShopData() {
     }
   }
 
-  writeFileSync(SHOP_FILE, JSON.stringify({ colors, cuts }, null, 2) + '\n');
-  console.log(`shop-data.json: ${colors.length} color(s), ${cuts.length} cut(s)`);
+  // Designs sheet (optional): default placement per design file
+  // Columns: File | X | Y | Scale  (all % of the shirt canvas; blank = centered default)
+  const designDefaults = [];
+  if (wb.Sheets['Designs']) {
+    for (const row of XLSX.utils.sheet_to_json(wb.Sheets['Designs'])) {
+      const file = String(row.File ?? '').trim();
+      const x = Number(row.X);
+      const y = Number(row.Y);
+      const scale = Number(row.Scale);
+      if (!file || ![x, y, scale].every(Number.isFinite)) continue;
+      designDefaults.push({ file, x, y, scale });
+    }
+  }
+
+  writeFileSync(SHOP_FILE, JSON.stringify({ colors, cuts, designDefaults }, null, 2) + '\n');
+  console.log(
+    `shop-data.json: ${colors.length} color(s), ${cuts.length} cut(s), ${designDefaults.length} design default(s)`
+  );
 }
 
 await buildDesigns();

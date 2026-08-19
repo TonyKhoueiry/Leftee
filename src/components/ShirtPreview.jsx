@@ -3,6 +3,7 @@ import DesignArt from './DesignArt.jsx';
 
 const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
 const MIN_SIZE = 6;
+const MIN_AREA = 8; // minimum print-area width/height in %
 
 // Keep the design's center far enough from the boundary that its edges stay inside.
 const clampCenter = (v, lo, hi, size) => {
@@ -17,9 +18,9 @@ const clampCenter = (v, lo, hi, size) => {
  * Layers (bottom → top): white box, flat garment color, the untouched mockup
  * image (its transparent shirt shape reveals the color), the draggable design.
  *
- * The dashed print area is a fixed boundary: the design moves and grows only
- * within it. Clicking the design shows corner handles for resizing; clicking
- * anywhere else hides them.
+ * The dashed print area is a fixed boundary the design moves/grows within.
+ * In admin area-edit mode (areaEditable) the boundary itself becomes
+ * draggable and resizable; customers never see that.
  */
 export default function ShirtPreview({
   cut,
@@ -31,10 +32,13 @@ export default function ShirtPreview({
   onResize,
   selected,
   onSelectChange,
+  areaEditable = false,
+  onAreaChange,
 }) {
   const canvasRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
+  const areaGesture = useRef(null); // { mode, start: {x,y}, area }
   const area = cut?.printArea ?? { left: 25, top: 30, right: 75, bottom: 80 };
   const maxSize = Math.max(MIN_SIZE, Math.min(area.right - area.left, area.bottom - area.top));
 
@@ -46,6 +50,8 @@ export default function ShirtPreview({
       y: ((clientY - rect.top) / rect.height) * 100,
     };
   }, []);
+
+  /* ---- design move / resize (public + admin) ---- */
 
   const moveTo = useCallback(
     (clientX, clientY) => {
@@ -66,7 +72,6 @@ export default function ShirtPreview({
       const wanted = 2 * Math.max(Math.abs(p.x - position.x), Math.abs(p.y - position.y));
       const next = clamp(wanted, MIN_SIZE, maxSize);
       onResize(next);
-      // Growing near the edge: nudge the design back inside the boundary
       onMove({
         x: clampCenter(position.x, area.left, area.right, next),
         y: clampCenter(position.y, area.top, area.bottom, next),
@@ -74,6 +79,49 @@ export default function ShirtPreview({
     },
     [pointerPct, onResize, onMove, position.x, position.y, maxSize, area.left, area.right, area.top, area.bottom]
   );
+
+  /* ---- print-area editing (admin only) ---- */
+
+  const startAreaGesture = (mode) => (e) => {
+    if (!areaEditable) return;
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const p = pointerPct(e.clientX, e.clientY);
+    if (p) areaGesture.current = { mode, start: p, area: { ...area } };
+  };
+
+  const moveAreaGesture = (e) => {
+    const g = areaGesture.current;
+    if (!g) return;
+    const p = pointerPct(e.clientX, e.clientY);
+    if (!p) return;
+    const dx = p.x - g.start.x;
+    const dy = p.y - g.start.y;
+    const a = { ...g.area };
+    if (g.mode === 'move') {
+      const w = a.right - a.left;
+      const h = a.bottom - a.top;
+      a.left = clamp(g.area.left + dx, 0, 100 - w);
+      a.top = clamp(g.area.top + dy, 0, 100 - h);
+      a.right = a.left + w;
+      a.bottom = a.top + h;
+    } else {
+      if (g.mode.includes('w')) a.left = clamp(g.area.left + dx, 0, g.area.right - MIN_AREA);
+      if (g.mode.includes('e')) a.right = clamp(g.area.right + dx, g.area.left + MIN_AREA, 100);
+      if (g.mode.includes('n')) a.top = clamp(g.area.top + dy, 0, g.area.bottom - MIN_AREA);
+      if (g.mode.includes('s')) a.bottom = clamp(g.area.bottom + dy, g.area.top + MIN_AREA, 100);
+    }
+    onAreaChange?.({
+      left: Number(a.left.toFixed(1)),
+      top: Number(a.top.toFixed(1)),
+      right: Number(a.right.toFixed(1)),
+      bottom: Number(a.bottom.toFixed(1)),
+    });
+  };
+
+  const endAreaGesture = () => {
+    areaGesture.current = null;
+  };
 
   // Click outside the canvas hides the transform box
   useEffect(() => {
@@ -85,7 +133,7 @@ export default function ShirtPreview({
     return () => document.removeEventListener('pointerdown', onDocDown);
   }, [selected, onSelectChange]);
 
-  const handles = [
+  const cornerHandles = [
     ['nw', { left: 0, top: 0 }, 'cursor-nwse-resize'],
     ['ne', { right: 0, top: 0 }, 'cursor-nesw-resize'],
     ['sw', { left: 0, bottom: 0 }, 'cursor-nesw-resize'],
@@ -115,13 +163,17 @@ export default function ShirtPreview({
         <div className="aspect-square w-full" />
       )}
 
-      {/* Print area — a fixed boundary, independent of the design */}
-      {design && (
+      {/* Print area — fixed boundary; editable only in admin area-edit mode */}
+      {(design || areaEditable) && (
         <div
-          className={`pointer-events-none absolute rounded-lg border border-dashed transition-opacity ${
-            isDragging || isResizing || selected
-              ? 'border-clay opacity-90'
-              : 'border-stone opacity-25'
+          className={`absolute rounded-lg border border-dashed transition-colors ${
+            areaEditable
+              ? 'cursor-move border-clay bg-clay/10'
+              : `pointer-events-none ${
+                  isDragging || isResizing || selected
+                    ? 'border-clay opacity-90'
+                    : 'border-stone opacity-25'
+                }`
           }`}
           style={{
             left: `${area.left}%`,
@@ -129,17 +181,41 @@ export default function ShirtPreview({
             width: `${area.right - area.left}%`,
             height: `${area.bottom - area.top}%`,
           }}
-        />
+          onPointerDown={startAreaGesture('move')}
+          onPointerMove={moveAreaGesture}
+          onPointerUp={endAreaGesture}
+          onPointerCancel={endAreaGesture}
+        >
+          {areaEditable &&
+            cornerHandles.map(([mode, pos, cursor]) => (
+              <span
+                key={mode}
+                className={`absolute z-10 h-3.5 w-3.5 rounded-sm border-2 border-white bg-clay shadow ${cursor} touch-none`}
+                style={{
+                  ...pos,
+                  transform: `translate(${'left' in pos ? '-50%' : '50%'}, ${
+                    'top' in pos ? '-50%' : '50%'
+                  })`,
+                }}
+                onPointerDown={startAreaGesture(mode)}
+                onPointerMove={moveAreaGesture}
+                onPointerUp={endAreaGesture}
+                onPointerCancel={endAreaGesture}
+              />
+            ))}
+        </div>
       )}
 
-      {/* Draggable, resizable design */}
+      {/* Draggable, resizable design (inert while editing the area) */}
       {design && (
         <div
           role="img"
           aria-label={design.title}
           className={`absolute touch-none transition-transform duration-75 ${
-            isDragging ? 'cursor-grabbing' : 'cursor-grab'
-          } ${selected ? 'outline outline-1 outline-clay' : ''}`}
+            areaEditable ? 'pointer-events-none opacity-60' : ''
+          } ${isDragging ? 'cursor-grabbing' : 'cursor-grab'} ${
+            selected && !areaEditable ? 'outline outline-1 outline-clay' : ''
+          }`}
           style={{
             width: `${size}%`,
             height: `${size}%`,
@@ -162,9 +238,9 @@ export default function ShirtPreview({
             className="pointer-events-none h-full w-full text-ink drop-shadow-md"
           />
 
-          {/* Corner handles */}
           {selected &&
-            handles.map(([key, pos, cursor]) => (
+            !areaEditable &&
+            cornerHandles.map(([key, pos, cursor]) => (
               <span
                 key={key}
                 className={`absolute z-10 h-3.5 w-3.5 rounded-full border-2 border-white bg-clay shadow ${cursor} touch-none`}
