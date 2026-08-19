@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useConfig } from './lib/useConfig.js';
-import { isSvgMarkup, sanitizeSvg } from './lib/media.js';
+import { isSvgMarkup, prepareSvg } from './lib/media.js';
 import ShirtPreview from './components/ShirtPreview.jsx';
 import DesignArt from './components/DesignArt.jsx';
 import Modal from './components/Modal.jsx';
 
 const HEX_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+// Admin workbench: open the site with ?admin (e.g. leftee.netlify.app/?admin)
+const IS_ADMIN =
+  typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('admin');
 
 /* ---------- Small UI atoms ---------- */
 
@@ -23,7 +27,7 @@ function Section({ index, title, children }) {
 
 function Disclosure({ label, children }) {
   return (
-    <details className="mt-4 group">
+    <details className="group mt-4">
       <summary className="cursor-pointer list-none text-sm text-stone transition-colors hover:text-ink">
         <span className="mr-1 inline-block transition-transform group-open:rotate-45">+</span>
         {label}
@@ -46,12 +50,14 @@ export default function App() {
 
   // Selections
   const [selectedCutId, setSelectedCutId] = useState(null);
-  const [selectedColor, setSelectedColor] = useState(null);
+  const [selectedColorHex, setSelectedColorHex] = useState(null);
   const [selectedSize, setSelectedSize] = useState(null);
   const [selectedDesign, setSelectedDesign] = useState(null);
   const [designPosition, setDesignPosition] = useState({ x: 50, y: 50 });
+  const [designSize, setDesignSize] = useState(20);
+  const [designActive, setDesignActive] = useState(false); // transform box visible
 
-  // Session-only additions by the visitor (permanent options live in config.json)
+  // Session-only additions (admin workbench)
   const [customColors, setCustomColors] = useState([]);
   const [customSizes, setCustomSizes] = useState([]);
   const [customDesigns, setCustomDesigns] = useState([]);
@@ -68,8 +74,9 @@ export default function App() {
   useEffect(() => {
     if (!config) return;
     setSelectedCutId((v) => v ?? config.cuts[0]?.id ?? null);
-    setSelectedColor((v) => v ?? config.colors[0] ?? '#ffffff');
-    setSelectedSize((v) => v ?? (config.sizes.includes('M') ? 'M' : config.sizes[0]));
+    setSelectedColorHex((v) => v ?? config.colors[0]?.hex ?? '#ffffff');
+    setSelectedSize((v) => v ?? (config.sizes?.includes('M') ? 'M' : config.sizes?.[0]));
+    setDesignSize(config.designScale ?? 20);
   }, [config]);
 
   if (error) {
@@ -88,16 +95,49 @@ export default function App() {
   }
 
   const cuts = config.cuts ?? [];
-  const colors = [...(config.colors ?? []), ...customColors];
-  const sizes = [...(config.sizes ?? []), ...customSizes];
-  const designs = [...(config.designs ?? []), ...customDesigns];
-  const designScale = config.designScale ?? 20;
   const selectedCut = cuts.find((c) => c.id === selectedCutId) ?? cuts[0];
+
+  // Per-cut allowed colors/sizes (empty list in the Excel row = allow all)
+  const allColors = [...(config.colors ?? []), ...customColors];
+  const cutColorFilter = new Set(
+    (selectedCut?.colors ?? []).map((c) => String(c).trim().toLowerCase())
+  );
+  const colors = cutColorFilter.size
+    ? allColors.filter(
+        (c) =>
+          cutColorFilter.has(c.hex.toLowerCase()) ||
+          cutColorFilter.has(String(c.name ?? '').toLowerCase())
+      )
+    : allColors;
+
+  const sizes = [
+    ...(selectedCut?.sizes?.length ? selectedCut.sizes : config.sizes ?? []),
+    ...customSizes,
+  ];
+
+  const designs = [...(config.designs ?? []), ...customDesigns];
+
+  // Keep selections valid when the cut changes
+  const activeColor = colors.find((c) => c.hex === selectedColorHex) ?? colors[0];
+  const activeSize = sizes.includes(selectedSize) ? selectedSize : sizes[0];
+  const colorTitle = activeColor
+    ? `${activeColor.name}${activeColor.pantone ? ` (${activeColor.pantone})` : ''}`
+    : '—';
 
   const showError = (body) => setModal({ title: 'Hold on', body });
 
+  const selectCut = (id) => {
+    setSelectedCutId(id);
+    const cut = cuts.find((c) => c.id === id);
+    if (cut?.printArea && selectedDesign) {
+      const a = cut.printArea;
+      setDesignPosition({ x: (a.left + a.right) / 2, y: (a.top + a.bottom) / 2 });
+    }
+  };
+
   const selectDesign = (design) => {
     setSelectedDesign(design);
+    setDesignActive(Boolean(design));
     if (design && selectedCut?.printArea) {
       const a = selectedCut.printArea;
       setDesignPosition({ x: (a.left + a.right) / 2, y: (a.top + a.bottom) / 2 });
@@ -105,11 +145,11 @@ export default function App() {
   };
 
   const handleAddColor = () => {
-    const color = newColorInput.trim().toLowerCase();
-    if (!HEX_RE.test(color)) return showError('Please enter a valid hex color, e.g. #b0603f.');
-    if (colors.includes(color)) return showError('That color is already in the palette.');
-    setCustomColors((prev) => [...prev, color]);
-    setSelectedColor(color);
+    const hex = newColorInput.trim().toLowerCase();
+    if (!HEX_RE.test(hex)) return showError('Please enter a valid hex color, e.g. #b0603f.');
+    if (allColors.some((c) => c.hex === hex)) return showError('That color is already in the palette.');
+    setCustomColors((prev) => [...prev, { name: hex, hex }]);
+    setSelectedColorHex(hex);
   };
 
   const handleAddSize = () => {
@@ -129,7 +169,7 @@ export default function App() {
     }
     let design;
     if (isSvgMarkup(source)) {
-      const clean = sanitizeSvg(source);
+      const clean = prepareSvg(source);
       if (!clean) return showError('That SVG code is not valid.');
       design = { id: `custom-${Date.now()}`, title, svg: clean };
     } else if (/^(https?:\/\/|\/)/i.test(source)) {
@@ -144,16 +184,16 @@ export default function App() {
   };
 
   const handleOrder = () => {
-    // Shopify-ready: if config.orderUrl is set, hand the choices to that page
-    // (e.g. a Shopify product URL). Otherwise show the summary dialog.
     if (config.orderUrl) {
       const params = new URLSearchParams({
         cut: selectedCut?.label ?? '',
-        color: selectedColor ?? '',
-        size: selectedSize ?? '',
+        color: colorTitle,
+        hex: activeColor?.hex ?? '',
+        size: activeSize ?? '',
         design: selectedDesign?.title ?? 'none',
         x: designPosition.x.toFixed(0),
         y: designPosition.y.toFixed(0),
+        scale: designSize.toFixed(0),
       });
       window.open(`${config.orderUrl}?${params.toString()}`, '_blank', 'noopener');
       return;
@@ -162,11 +202,18 @@ export default function App() {
       title: 'Order Summary',
       rows: [
         ['Cut', selectedCut?.label ?? '—'],
-        ['Color', selectedColor ?? '—'],
-        ['Size', selectedSize ?? '—'],
+        ['Color', `${colorTitle} · ${activeColor?.hex ?? ''}`],
+        ['Size', activeSize ?? '—'],
         ['Design', selectedDesign ? selectedDesign.title : 'None'],
         ...(selectedDesign
-          ? [['Placement', `${designPosition.x.toFixed(0)}% across · ${designPosition.y.toFixed(0)}% down`]]
+          ? [
+              [
+                'Placement',
+                `${designPosition.x.toFixed(0)}% across · ${designPosition.y.toFixed(
+                  0
+                )}% down · ${designSize.toFixed(0)}% wide`,
+              ],
+            ]
           : []),
       ],
     });
@@ -187,7 +234,14 @@ export default function App() {
       {/* Header */}
       <header className="border-b border-sand">
         <div className="mx-auto flex max-w-6xl items-baseline justify-between px-4 py-5 sm:px-6">
-          <h1 className="font-display text-2xl">{config.shopName ?? 'T-Shirt Studio'}</h1>
+          <h1 className="font-display text-2xl font-semibold">
+            {config.shopName ?? 'Leftee'}
+            {IS_ADMIN && (
+              <span className="ml-3 rounded-full border border-clay px-2 py-0.5 align-middle text-[10px] font-medium uppercase tracking-widest text-clay">
+                Admin
+              </span>
+            )}
+          </h1>
           <p className="hidden text-xs uppercase tracking-[0.2em] text-stone sm:block">
             Made to order
           </p>
@@ -200,15 +254,18 @@ export default function App() {
           <div className="lg:sticky lg:top-8 lg:self-start">
             <ShirtPreview
               cut={selectedCut}
-              color={selectedColor}
+              color={activeColor?.hex}
               design={selectedDesign}
               position={designPosition}
               onMove={setDesignPosition}
-              designScale={designScale}
+              size={designSize}
+              onResize={setDesignSize}
+              selected={designActive}
+              onSelectChange={setDesignActive}
             />
             <p className="mt-3 text-center text-sm text-stone">
               {selectedDesign
-                ? 'Drag the artwork to position it.'
+                ? 'Drag to position · click the artwork to resize with the corner handles.'
                 : 'Pick a design to place it on the shirt.'}
             </p>
           </div>
@@ -216,16 +273,14 @@ export default function App() {
           {/* Controls */}
           <div>
             <Section index="01" title="Cut">
-              <div className="inline-flex rounded-full border border-sand bg-paper p-1">
+              <div className="inline-flex max-w-full flex-wrap rounded-full border border-sand bg-paper p-1">
                 {cuts.map((cut) => (
                   <button
                     key={cut.id}
                     type="button"
-                    onClick={() => setSelectedCutId(cut.id)}
+                    onClick={() => selectCut(cut.id)}
                     className={`rounded-full px-5 py-2 text-sm font-medium transition-colors ${
-                      selectedCutId === cut.id
-                        ? 'bg-ink text-cream'
-                        : 'text-stone hover:text-ink'
+                      selectedCut?.id === cut.id ? 'bg-ink text-cream' : 'text-stone hover:text-ink'
                     }`}
                   >
                     {cut.label}
@@ -236,43 +291,46 @@ export default function App() {
 
             <Section index="02" title="Color">
               <div className="flex flex-wrap gap-3">
-                {colors.map((color) => (
+                {colors.map((c) => (
                   <button
-                    key={color}
+                    key={c.hex}
                     type="button"
-                    onClick={() => setSelectedColor(color)}
-                    aria-label={`Color ${color}`}
-                    title={color}
+                    onClick={() => setSelectedColorHex(c.hex)}
+                    aria-label={`Color ${c.name}`}
+                    title={`${c.name}${c.pantone ? ` · ${c.pantone}` : ''} · ${c.hex}`}
                     className={`h-9 w-9 rounded-full border border-sand transition-all ${
-                      selectedColor === color
+                      activeColor?.hex === c.hex
                         ? 'ring-2 ring-clay ring-offset-2 ring-offset-cream'
                         : 'hover:ring-2 hover:ring-sand hover:ring-offset-2 hover:ring-offset-cream'
                     }`}
-                    style={{ backgroundColor: color }}
+                    style={{ backgroundColor: c.hex }}
                   />
                 ))}
               </div>
-              <Disclosure label="Add a custom color">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    value={HEX_RE.test(newColorInput) ? newColorInput : '#b0603f'}
-                    onChange={(e) => setNewColorInput(e.target.value)}
-                    className="h-9 w-9 cursor-pointer rounded-lg border border-sand bg-paper"
-                    title="Pick custom color"
-                  />
-                  <input
-                    type="text"
-                    placeholder="#B0603F"
-                    value={newColorInput}
-                    onChange={(e) => setNewColorInput(e.target.value)}
-                    className={inputClass}
-                  />
-                  <button type="button" onClick={handleAddColor} className={addBtnClass}>
-                    Add
-                  </button>
-                </div>
-              </Disclosure>
+              <p className="mt-2 text-xs text-stone">{colorTitle}</p>
+              {IS_ADMIN && (
+                <Disclosure label="Try a color (session only — add permanently via shop-data.xlsx)">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={HEX_RE.test(newColorInput) ? newColorInput : '#b0603f'}
+                      onChange={(e) => setNewColorInput(e.target.value)}
+                      className="h-9 w-9 cursor-pointer rounded-lg border border-sand bg-paper"
+                      title="Pick custom color"
+                    />
+                    <input
+                      type="text"
+                      placeholder="#B0603F"
+                      value={newColorInput}
+                      onChange={(e) => setNewColorInput(e.target.value)}
+                      className={inputClass}
+                    />
+                    <button type="button" onClick={handleAddColor} className={addBtnClass}>
+                      Add
+                    </button>
+                  </div>
+                </Disclosure>
+              )}
             </Section>
 
             <Section index="03" title="Size">
@@ -283,7 +341,7 @@ export default function App() {
                     type="button"
                     onClick={() => setSelectedSize(size)}
                     className={`min-w-12 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
-                      selectedSize === size
+                      activeSize === size
                         ? 'border-ink bg-ink text-cream'
                         : 'border-sand bg-paper text-ink hover:border-ink'
                     }`}
@@ -292,22 +350,24 @@ export default function App() {
                   </button>
                 ))}
               </div>
-              <Disclosure label="Need another size?">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    placeholder="e.g. 3XL"
-                    maxLength={6}
-                    value={newSizeInput}
-                    onChange={(e) => setNewSizeInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddSize()}
-                    className={inputClass}
-                  />
-                  <button type="button" onClick={handleAddSize} className={addBtnClass}>
-                    Add
-                  </button>
-                </div>
-              </Disclosure>
+              {IS_ADMIN && (
+                <Disclosure label="Try a size (session only — add permanently via shop-data.xlsx)">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="e.g. 3XL"
+                      maxLength={6}
+                      value={newSizeInput}
+                      onChange={(e) => setNewSizeInput(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleAddSize()}
+                      className={inputClass}
+                    />
+                    <button type="button" onClick={handleAddSize} className={addBtnClass}>
+                      Add
+                    </button>
+                  </div>
+                </Disclosure>
+              )}
             </Section>
 
             <Section index="04" title="Design">
@@ -329,7 +389,7 @@ export default function App() {
                 ))}
                 <button
                   type="button"
-                  onClick={() => setSelectedDesign(null)}
+                  onClick={() => selectDesign(null)}
                   className={`flex aspect-square items-center justify-center rounded-xl border text-xs font-medium transition-all ${
                     selectedDesign === null
                       ? 'border-clay bg-paper text-clay ring-1 ring-clay'
@@ -339,7 +399,7 @@ export default function App() {
                   None
                 </button>
               </div>
-              {config.allowCustomerUploads !== false && (
+              {(IS_ADMIN || config.allowCustomerUploads !== false) && (
                 <Disclosure label="Use your own artwork">
                   <div className="flex flex-col gap-2">
                     <textarea
@@ -368,7 +428,7 @@ export default function App() {
             <div className="hidden border-t border-sand pt-6 lg:block">
               {orderButton}
               <p className="mt-3 text-center text-xs text-stone">
-                {selectedCut?.label} · {selectedColor} · {selectedSize} ·{' '}
+                {selectedCut?.label} · {colorTitle} · {activeSize} ·{' '}
                 {selectedDesign ? selectedDesign.title : 'no design'}
               </p>
             </div>
@@ -383,7 +443,7 @@ export default function App() {
 
       <footer className="hidden border-t border-sand lg:block">
         <div className="mx-auto max-w-6xl px-6 py-6 text-xs text-stone">
-          © {new Date().getFullYear()} {config.shopName ?? 'T-Shirt Studio'}
+          © {new Date().getFullYear()} {config.shopName ?? 'Leftee'}
         </div>
       </footer>
 

@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react';
 
+const jsonOrNull = (res) => (res.ok ? res.json() : null);
+
 /**
- * Loads /config.json (shop settings) and /designs-manifest.json (auto-generated
- * from the files in public/designs/ at build time), and merges the two design
- * lists. Entries in config.json win over manifest entries for the same file,
- * so you can still pin a custom title there if you want; everything else is
- * automatic — upload a file to the designs folder and it appears.
+ * Loads and merges three sources:
+ * - /config.json          — shop settings (name, orderUrl, sizes, fallbacks)
+ * - /shop-data.json       — generated from shop-data.xlsx (colors, cuts)
+ * - /designs-manifest.json — generated from the files in public/designs/
+ *
+ * Result shape:
+ *   colors: [{ name, hex, pantone? }]
+ *   cuts:   [{ id, label, image, printArea, sizes: [], colors: [] }]
+ *   designs:[{ id, title, src, printSrc? }]
  */
 export function useConfig() {
   const [config, setConfig] = useState(null);
@@ -17,18 +23,36 @@ export function useConfig() {
         if (!res.ok) throw new Error(`Could not load config.json (HTTP ${res.status})`);
         return res.json();
       }),
-      fetch('/designs-manifest.json', { cache: 'no-store' })
-        .then((res) => (res.ok ? res.json() : []))
-        .catch(() => []),
+      fetch('/shop-data.json', { cache: 'no-store' }).then(jsonOrNull).catch(() => null),
+      fetch('/designs-manifest.json', { cache: 'no-store' }).then(jsonOrNull).catch(() => null),
     ])
-      .then(([cfg, manifest]) => {
+      .then(([cfg, shop, manifest]) => {
+        // Colors: Excel wins; config.json strings are the fallback
+        const colors =
+          shop?.colors?.length
+            ? shop.colors
+            : (cfg.colors ?? []).map((c) =>
+                typeof c === 'string' ? { name: c, hex: c } : c
+              );
+
+        // Cuts: Excel wins; config.json cuts are the fallback
+        const cuts = (shop?.cuts?.length ? shop.cuts : cfg.cuts ?? []).map((cut) => ({
+          sizes: [],
+          colors: [],
+          ...cut,
+        }));
+
+        // Designs: manual entries in config.json win over the auto manifest
         const manual = cfg.designs ?? [];
-        const listedSrcs = new Set(manual.map((d) => d.src));
-        const merged = [
+        const listed = new Set(manual.map((d) => d.src));
+        const designs = [
           ...manual,
-          ...(Array.isArray(manifest) ? manifest : []).filter((d) => !listedSrcs.has(d.src)),
+          ...(Array.isArray(manifest) ? manifest : []).filter(
+            (d) => !listed.has(d.src) && !listed.has(d.printSrc)
+          ),
         ];
-        setConfig({ ...cfg, designs: merged });
+
+        setConfig({ ...cfg, colors, cuts, designs });
       })
       .catch((err) => setError(err.message));
   }, []);
