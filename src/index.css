@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+@theme {
+  /* Earth palette */
+  --color-cream: #f7f3ec; /* page background */
+  --color-paper: #fdfbf8; /* cards / surfaces */
+  --color-sand: #e6ddcb; /* hairlines, soft fills */
+  --color-clay: #b0603f; /* primary accent (terracotta) */
+  --color-clay-dark: #96502f;
+  --color-olive: #7c7a58; /* secondary accent */
+  --color-ink: #2b2723; /* text */
+  --color-stone: #8a8378; /* muted text */
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+}
+
+/* Inlined SVG designs scale to their container */
+.design-art svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Quiet, consistent focus rings */
+:focus-visible {
+  outline: 2px solid var(--color-clay);
+  outline-offset: 2px;
+}

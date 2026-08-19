@@ -1,0 +1,80 @@
+# Decap CMS configuration — the admin panel at /admin
+#
+# SETUP (one time, see README step 4):
+# 1. Create a free account at https://decapbridge.com and add your GitHub repo.
+# 2. DecapBridge gives you a "backend" block — replace the backend block below with it.
+# 3. Commit & push. Open yoursite.netlify.app/admin and log in.
+
+backend:
+  name: git-gateway
+  repo: YOUR_GITHUB_USERNAME/YOUR_REPO # <-- replace
+  branch: main
+  identity_url: https://auth.decapbridge.com/sites/YOUR_SITE_ID # <-- from DecapBridge
+  gateway_url: https://gateway.decapbridge.com
+
+# Where uploaded images (mockups, designs) are stored in the repo
+media_folder: "public/uploads"
+public_folder: "/uploads"
+
+collections:
+  - name: "settings"
+    label: "Shop Settings"
+    files:
+      - name: "shop"
+        label: "T-Shirt Options"
+        file: "public/config.json"
+        fields:
+          - { label: "Shop Name", name: "shopName", widget: "string" }
+
+          - label: "Order URL (optional — e.g. your Shopify product page; leave empty to show a summary instead)"
+            name: "orderUrl"
+            widget: "string"
+            required: false
+
+          - label: "Garment Colors (hex codes)"
+            name: "colors"
+            widget: "list"
+            field: { label: "Hex color", name: "color", widget: "color" }
+
+          - label: "Sizes"
+            name: "sizes"
+            widget: "list"
+            field: { label: "Size", name: "size", widget: "string" }
+
+          - label: "Design size on shirt (% of canvas)"
+            name: "designScale"
+            widget: "number"
+            value_type: "int"
+            min: 5
+            max: 60
+
+          - label: "Allow customers to add their own designs"
+            name: "allowCustomerUploads"
+            widget: "boolean"
+            default: true
+
+          - label: "Cuts"
+            name: "cuts"
+            widget: "list"
+            summary: "{{fields.label}}"
+            fields:
+              - { label: "ID (no spaces, e.g. long-sleeve)", name: "id", widget: "string" }
+              - { label: "Display name", name: "label", widget: "string" }
+              - { label: "Mockup image (transparent PNG)", name: "image", widget: "image" }
+              - label: "Print area (% of canvas)"
+                name: "printArea"
+                widget: "object"
+                fields:
+                  - { label: "Left", name: "left", widget: "number", value_type: "float", min: 0, max: 100 }
+                  - { label: "Top", name: "top", widget: "number", value_type: "float", min: 0, max: 100 }
+                  - { label: "Right", name: "right", widget: "number", value_type: "float", min: 0, max: 100 }
+                  - { label: "Bottom", name: "bottom", widget: "number", value_type: "float", min: 0, max: 100 }
+
+          - label: "Design Library"
+            name: "designs"
+            widget: "list"
+            summary: "{{fields.title}}"
+            fields:
+              - { label: "ID (no spaces)", name: "id", widget: "string" }
+              - { label: "Title", name: "title", widget: "string" }
+              - { label: "Image (PNG, JPG or SVG)", name: "src", widget: "image" }
