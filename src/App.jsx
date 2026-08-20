@@ -78,6 +78,8 @@ export default function App() {
   const [areaEdit, setAreaEdit] = useState(false);
   const [areaOverrides, setAreaOverrides] = useState(loadAreaOverrides);
   const [designDefaults, setDesignDefaults] = useState(loadDesignDefaults);
+  // Designs just uploaded from the admin, shown immediately while Netlify rebuilds
+  const [sessionUploads, setSessionUploads] = useState([]);
 
   const [modal, setModal] = useState(null);
 
@@ -143,7 +145,14 @@ export default function App() {
     ...customSizes,
   ];
 
-  const designs = config.designs ?? [];
+  // Published designs + this session's fresh uploads (deduped by filename)
+  const publishedFiles = new Set(
+    (config.designs ?? []).map((d) => String(d.printSrc ?? d.src ?? '').split('/').pop())
+  );
+  const designs = [
+    ...(config.designs ?? []),
+    ...sessionUploads.filter((d) => !publishedFiles.has(d.file)),
+  ];
 
   // Print area: admin override (this browser) wins over the published value
   const effectiveArea = areaOverrides[selectedCut?.id] ?? selectedCut?.printArea;
@@ -360,6 +369,19 @@ export default function App() {
                   designDefaults,
                 })}
                 repo={config.repo}
+                onUploaded={({ name, url }) => {
+                  const stem = name.replace(/\.[^.]+$/, '');
+                  setSessionUploads((prev) => [
+                    ...prev,
+                    {
+                      id: stem.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''),
+                      title: stem.replace(/[_-]+/g, ' ').trim(),
+                      src: url,
+                      printSrc: `/designs/${name}`,
+                      file: name,
+                    },
+                  ]);
+                }}
               />
             )}
             <ShirtPreview

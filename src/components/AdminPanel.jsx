@@ -28,14 +28,18 @@ export default function AdminPanel({
   hasDesignDefault,
   exportData,
   repo,
+  onUploaded,
 }) {
   const [busy, setBusy] = useState('');
   const [note, setNote] = useState('');
-  const [token, setToken] = useState(loadToken);
-  const [showToken, setShowToken] = useState(false);
+  const [savedToken, setSavedToken] = useState(loadToken); // persisted token
+  const [draftToken, setDraftToken] = useState('');
+  const [editingToken, setEditingToken] = useState(false);
   const fileInputRef = useRef(null);
 
-  const connected = Boolean(token && repo);
+  const token = savedToken;
+  const connected = Boolean(savedToken && repo);
+  const showTokenForm = editingToken || !connected;
 
   const flash = (msg, sticky = false) => {
     setNote(msg);
@@ -67,8 +71,14 @@ export default function AdminPanel({
         });
         done += 1;
         flash(`Uploading… ${done}/${files.length}`, true);
+        // Show it in the gallery right away (from the local file) while
+        // Netlify rebuilds the live site.
+        onUploaded?.({ name: file.name, url: URL.createObjectURL(file) });
       }
-      flash(`${done} design(s) uploaded — live in ~1 minute.`);
+      flash(
+        `${done} design(s) sent to GitHub. The live site updates when the Netlify deploy turns green (~1–2 min); they're already in your gallery here.`,
+        true
+      );
     });
 
   const handlePublish = () =>
@@ -141,36 +151,64 @@ export default function AdminPanel({
 
       {/* GitHub connection */}
       <div className="mt-3 border-t border-sand pt-3">
-        {showToken || !connected ? (
+        {showTokenForm ? (
           <div className="flex flex-wrap items-center gap-2">
             <input
               type="password"
               placeholder="GitHub token (fine-grained, Contents: read & write)"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
+              value={draftToken}
+              onChange={(e) => setDraftToken(e.target.value)}
               className="min-w-0 flex-grow rounded-lg border border-sand bg-white px-3 py-2 text-xs text-ink placeholder:text-stone/70 focus:border-clay focus:outline-none"
             />
             <button
               type="button"
+              disabled={!draftToken.trim()}
               onClick={() => {
-                saveToken(token);
-                setShowToken(false);
-                flash(token ? 'Token saved in this browser.' : 'Token cleared.');
+                const t = draftToken.trim();
+                saveToken(t);
+                setSavedToken(t);
+                setDraftToken('');
+                setEditingToken(false);
+                flash('Token saved in this browser.');
               }}
-              className="rounded-lg border border-ink px-3 py-1.5 text-xs font-medium text-ink transition-colors hover:bg-ink hover:text-cream"
+              className="rounded-lg border border-ink px-3 py-1.5 text-xs font-medium text-ink transition-colors hover:bg-ink hover:text-cream disabled:opacity-40"
             >
               Save
             </button>
+            {connected && (
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingToken(false);
+                  setDraftToken('');
+                }}
+                className="text-xs text-stone underline-offset-2 hover:text-ink hover:underline"
+              >
+                Cancel
+              </button>
+            )}
           </div>
         ) : (
           <p className="text-xs text-stone">
             GitHub connected ({repo}).{' '}
             <button
               type="button"
-              onClick={() => setShowToken(true)}
+              onClick={() => setEditingToken(true)}
               className="underline underline-offset-2 hover:text-ink"
             >
               Change token
+            </button>
+            {' · '}
+            <button
+              type="button"
+              onClick={() => {
+                saveToken('');
+                setSavedToken('');
+                flash('Token removed from this browser.');
+              }}
+              className="underline underline-offset-2 hover:text-ink"
+            >
+              Disconnect
             </button>
           </p>
         )}
