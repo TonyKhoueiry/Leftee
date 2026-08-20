@@ -5,7 +5,7 @@ const basename = (p) => String(p ?? '').split('/').pop();
  * including any print areas and design defaults adjusted in this session —
  * and triggers a download. Upload the file to the repo root to publish.
  */
-export async function downloadShopData({ colors, cuts, areaOverrides, designs, designDefaults }) {
+async function buildWorkbook({ colors, cuts, areaOverrides, designs, designDefaults }) {
   const XLSX = await import('xlsx');
 
   const colorRows = colors.map((c) => ({
@@ -54,5 +54,17 @@ export async function downloadShopData({ colors, cuts, areaOverrides, designs, d
   wsDesigns['!cols'] = [{ wch: 34 }, { wch: 7 }, { wch: 7 }, { wch: 7 }];
   XLSX.utils.book_append_sheet(wb, wsDesigns, 'Designs');
 
+  return { XLSX, wb };
+}
+
+/** Download shop-data.xlsx to the admin's computer. */
+export async function downloadShopData(data) {
+  const { XLSX, wb } = await buildWorkbook(data);
   XLSX.writeFile(wb, 'shop-data.xlsx');
+}
+
+/** Return shop-data.xlsx as base64, for committing straight to GitHub. */
+export async function shopDataBase64(data) {
+  const { XLSX, wb } = await buildWorkbook(data);
+  return XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
 }

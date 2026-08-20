@@ -359,6 +359,7 @@ export default function App() {
                   designs,
                   designDefaults,
                 })}
+                repo={config.repo}
               />
             )}
             <ShirtPreview

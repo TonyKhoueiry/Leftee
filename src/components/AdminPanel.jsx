@@ -1,11 +1,20 @@
-import { useState } from 'react';
-import { downloadShopData } from '../lib/exportShopData.js';
+import { useRef, useState } from 'react';
+import { downloadShopData, shopDataBase64 } from '../lib/exportShopData.js';
 import { clearAdminEdits } from '../lib/adminStore.js';
+import {
+  loadToken,
+  saveToken,
+  commitFile,
+  deleteFileIfExists,
+  fileToBase64,
+} from '../lib/github.js';
 
 /**
  * Admin toolbox — rendered only in ?admin mode, above the preview.
- * Edits live in this browser until you download shop-data.xlsx and
- * upload it to the repo root; Netlify then republishes.
+ *
+ * With a GitHub token connected, designs can be uploaded and the spreadsheet
+ * published straight from here (each action commits to the repo; Netlify
+ * rebuilds in ~1 minute). Without a token, the download button still works.
  */
 export default function AdminPanel({
   areaEdit,
@@ -18,14 +27,72 @@ export default function AdminPanel({
   onSaveDesignDefault,
   hasDesignDefault,
   exportData,
+  repo,
 }) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState('');
   const [note, setNote] = useState('');
+  const [token, setToken] = useState(loadToken);
+  const [showToken, setShowToken] = useState(false);
+  const fileInputRef = useRef(null);
 
-  const flash = (msg) => {
+  const connected = Boolean(token && repo);
+
+  const flash = (msg, sticky = false) => {
     setNote(msg);
-    setTimeout(() => setNote(''), 3000);
+    if (!sticky) setTimeout(() => setNote(''), 6000);
   };
+
+  const run = async (label, fn) => {
+    setBusy(label);
+    try {
+      await fn();
+    } catch (err) {
+      flash(`${label} failed: ${err.message}`, true);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleUploadFiles = (files) =>
+    run('Upload', async () => {
+      let done = 0;
+      for (const file of files) {
+        const contentBase64 = await fileToBase64(file);
+        await commitFile({
+          repo,
+          token,
+          path: `public/designs/${file.name}`,
+          contentBase64,
+          message: `Add design: ${file.name}`,
+        });
+        done += 1;
+        flash(`Uploading… ${done}/${files.length}`, true);
+      }
+      flash(`${done} design(s) uploaded — live in ~1 minute.`);
+    });
+
+  const handlePublish = () =>
+    run('Publish', async () => {
+      const contentBase64 = await shopDataBase64(exportData());
+      await commitFile({
+        repo,
+        token,
+        path: 'shop-data.xlsx',
+        contentBase64,
+        message: 'Update shop data from admin',
+      });
+      // One source of truth: a stray .numbers file would override the published xlsx
+      const removed = await deleteFileIfExists({
+        repo,
+        token,
+        path: 'shop-data.numbers',
+        message: 'Remove shop-data.numbers (superseded by admin publish)',
+      });
+      clearAdminEdits();
+      flash(
+        `Published — live in ~1 minute.${removed ? ' (Replaced shop-data.numbers.)' : ''}`
+      );
+    });
 
   return (
     <div className="mb-6 rounded-2xl border border-clay/40 bg-paper p-4">
@@ -63,7 +130,7 @@ export default function AdminPanel({
             type="button"
             onClick={() => {
               onSaveDesignDefault();
-              flash('Default saved — download the sheet to publish.');
+              flash('Default saved — publish to make it live.');
             }}
             className="rounded-lg border border-ink px-3 py-1.5 text-xs font-medium text-ink transition-colors hover:bg-ink hover:text-cream"
           >
@@ -72,25 +139,82 @@ export default function AdminPanel({
         </div>
       )}
 
-      {/* Export */}
+      {/* GitHub connection */}
+      <div className="mt-3 border-t border-sand pt-3">
+        {showToken || !connected ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="password"
+              placeholder="GitHub token (fine-grained, Contents: read & write)"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              className="min-w-0 flex-grow rounded-lg border border-sand bg-white px-3 py-2 text-xs text-ink placeholder:text-stone/70 focus:border-clay focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                saveToken(token);
+                setShowToken(false);
+                flash(token ? 'Token saved in this browser.' : 'Token cleared.');
+              }}
+              className="rounded-lg border border-ink px-3 py-1.5 text-xs font-medium text-ink transition-colors hover:bg-ink hover:text-cream"
+            >
+              Save
+            </button>
+          </div>
+        ) : (
+          <p className="text-xs text-stone">
+            GitHub connected ({repo}).{' '}
+            <button
+              type="button"
+              onClick={() => setShowToken(true)}
+              className="underline underline-offset-2 hover:text-ink"
+            >
+              Change token
+            </button>
+          </p>
+        )}
+      </div>
+
+      {/* Actions */}
       <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-sand pt-3">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".png,.jpg,.jpeg,.webp,.gif,.svg"
+          className="hidden"
+          onChange={(e) => {
+            const files = [...e.target.files];
+            e.target.value = '';
+            if (files.length) handleUploadFiles(files);
+          }}
+        />
         <button
           type="button"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await downloadShopData(exportData());
-              flash('Downloaded — upload it to the repo root on GitHub.');
-            } catch (err) {
-              flash(`Export failed: ${err.message}`);
-            } finally {
-              setBusy(false);
-            }
-          }}
-          className="rounded-lg bg-clay px-4 py-2 text-xs font-semibold uppercase tracking-wider text-cream transition-colors hover:bg-clay-dark disabled:opacity-50"
+          disabled={!connected || Boolean(busy)}
+          onClick={() => fileInputRef.current?.click()}
+          title={connected ? '' : 'Save a GitHub token first'}
+          className="rounded-lg bg-clay px-4 py-2 text-xs font-semibold uppercase tracking-wider text-cream transition-colors hover:bg-clay-dark disabled:opacity-40"
         >
-          {busy ? 'Preparing…' : 'Download shop-data.xlsx'}
+          {busy === 'Upload' ? 'Uploading…' : 'Upload designs'}
+        </button>
+        <button
+          type="button"
+          disabled={!connected || Boolean(busy)}
+          onClick={handlePublish}
+          title={connected ? '' : 'Save a GitHub token first'}
+          className="rounded-lg bg-clay px-4 py-2 text-xs font-semibold uppercase tracking-wider text-cream transition-colors hover:bg-clay-dark disabled:opacity-40"
+        >
+          {busy === 'Publish' ? 'Publishing…' : 'Publish shop data'}
+        </button>
+        <button
+          type="button"
+          disabled={Boolean(busy)}
+          onClick={() => run('Download', () => downloadShopData(exportData()))}
+          className="rounded-lg border border-ink px-3 py-1.5 text-xs font-medium text-ink transition-colors hover:bg-ink hover:text-cream disabled:opacity-40"
+        >
+          Download sheet
         </button>
         <button
           type="button"
@@ -102,11 +226,6 @@ export default function AdminPanel({
         >
           Discard local edits
         </button>
-        <p className="w-full text-xs leading-relaxed text-stone">
-          The file opens directly in Numbers. If you edit it there, save/export as
-          <span className="font-medium text-ink"> shop-data.numbers</span> and upload that to the
-          repo — the build reads both formats (.numbers wins if both exist).
-        </p>
       </div>
     </div>
   );
