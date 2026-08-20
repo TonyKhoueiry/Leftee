@@ -373,6 +373,7 @@ export default function App() {
               onSelectChange={setDesignActive}
               areaEditable={IS_ADMIN && areaEdit}
               onAreaChange={handleAreaChange}
+              showArea={IS_ADMIN}
             />
             <p className="mt-3 text-center text-sm text-stone">
               {IS_ADMIN && areaEdit

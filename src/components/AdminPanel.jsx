@@ -102,6 +102,11 @@ export default function AdminPanel({
         >
           Discard local edits
         </button>
+        <p className="w-full text-xs leading-relaxed text-stone">
+          The file opens directly in Numbers. If you edit it there, save/export as
+          <span className="font-medium text-ink"> shop-data.numbers</span> and upload that to the
+          repo — the build reads both formats (.numbers wins if both exist).
+        </p>
       </div>
     </div>
   );

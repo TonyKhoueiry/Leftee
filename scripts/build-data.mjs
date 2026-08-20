@@ -28,9 +28,9 @@ const DESIGNS_DIR = 'public/designs';
 const WEB_DIR = 'public/designs-web';
 const MANIFEST_FILE = 'public/designs-manifest.json';
 const MOCKUPS_DIR = 'public/mockups';
-// Accepts either format — use whichever you have (Excel or Apple Numbers).
-// If both exist, the .xlsx wins.
-const DATA_FILES = ['shop-data.xlsx', 'shop-data.numbers'];
+// Accepts either format — use whichever you have (Apple Numbers or Excel).
+// If both exist, the .numbers file wins (delete the one you don't use).
+const DATA_FILES = ['shop-data.numbers', 'shop-data.xlsx'];
 const SHOP_FILE = 'public/shop-data.json';
 
 const RASTER_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);

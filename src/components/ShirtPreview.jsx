@@ -34,6 +34,7 @@ export default function ShirtPreview({
   onSelectChange,
   areaEditable = false,
   onAreaChange,
+  showArea = false,
 }) {
   const canvasRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -163,8 +164,8 @@ export default function ShirtPreview({
         <div className="aspect-square w-full" />
       )}
 
-      {/* Print area — fixed boundary; editable only in admin area-edit mode */}
-      {(design || areaEditable) && (
+      {/* Print area — invisible fence on the public site; visible/editable only for admin */}
+      {(areaEditable || (design && showArea)) && (
         <div
           className={`absolute rounded-lg border border-dashed transition-colors ${
             areaEditable
